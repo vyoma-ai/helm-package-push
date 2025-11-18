@@ -1,0 +1,86 @@
+name: Helm Package Push
+description: Action to package a helm chart and push it to the chart repo
+inputs:
+  dev:
+    description: Whether to create a development chart
+    required: false
+    default: "false"
+  acr-client-id:
+    description: Azure Container Registry client id
+    required: true
+  acr-client-secret:
+    description: Azure Container Registry client secret
+    required: true
+  push:
+    description: Push the chart to the chart repo
+    required: false
+    default: "true"
+  app-version:
+    description: The version of the application
+    required: false
+    default: ""
+  working-dir:
+    description: The working directory of the project
+    required: false
+    default: "."
+outputs:
+  chart-name:
+    description: The name of the chart
+    value: ${{ steps.set-output.outputs.chart-name }}
+  chart-version:
+    description: The version of the chart
+    value: ${{ steps.set-output.outputs.chart-version }}
+runs:
+  using: composite
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+    
+    - name: Login to Azure Container Registry
+      run: |
+        helm registry login myvyoma-bscqhjacgqesdtbw.azurecr.io --username ${{ inputs.acr-client-id }} --password ${{ inputs.acr-client-secret }}
+      shell: bash
+
+    - name: Set chart version
+      run: |
+        if [ "${{ inputs.dev }}" == "true" ]; then
+          echo "CHART_VERSION=$(yq -e '.version' './charts/Chart.yaml')-${{ github.sha }}" >> $GITHUB_ENV
+        else
+          echo "CHART_VERSION=$(yq -e '.version' './charts/Chart.yaml')" >> $GITHUB_ENV
+        fi
+        echo "CHART_NAME=$(yq -e '.name' './charts/Chart.yaml')" >> $GITHUB_ENV
+      working-directory: ${{ inputs.working-dir }}
+      shell: bash
+
+    - name: Set output
+      id: set-output
+      run: |
+        echo "chart-name=$(echo $CHART_NAME)" >> $GITHUB_OUTPUT
+        echo "chart-version=$(echo $CHART_VERSION)" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Add Helm repos in dependencies
+      run: |
+        cd charts
+        yq -e '.dependencies[] | .name + " " + .repository' Chart.yaml | while read -r line; do
+          REPO_NAME=$(echo $line | cut -d' ' -f1)
+          REPO_URL=$(echo $line | cut -d' ' -f2)
+          helm repo add $REPO_NAME $REPO_URL
+        done
+      working-directory: ${{ inputs.working-dir }}
+      shell: bash
+
+    - name: Build, package and push Helm chart
+      run: |
+        cd charts
+        helm dependency build
+        if [ "${{ inputs.app-version }}" == "" ]; then
+          helm package . --version "$CHART_VERSION"
+        else
+          helm package . --app-version ${{ inputs.app-version }} --version "$CHART_VERSION"
+        fi
+        if [ "${{ inputs.push }}" == "true" ]; then
+          helm push "$CHART_NAME"-"$CHART_VERSION".tgz oci://myvyoma-bscqhjacgqesdtbw.azurecr.io/charts
+        fi
+      working-directory: ${{ inputs.working-dir }}
+      shell: bash
