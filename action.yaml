@@ -62,10 +62,16 @@ runs:
     - name: Add Helm repos in dependencies
       run: |
         cd charts
-        yq -e '.dependencies[] | .name + " " + .repository' Chart.yaml | while read -r line; do
-          REPO_NAME=$(echo $line | cut -d' ' -f1)
-          REPO_URL=$(echo $line | cut -d' ' -f2)
-          helm repo add $REPO_NAME $REPO_URL
+        deps="$(yq -r '.dependencies // [] | length' Chart.yaml)"
+        if [ "${deps}" = "0" ] || [ "${deps}" = "null" ]; then
+          echo "No chart dependencies; skipping helm repo add"
+          exit 0
+        fi
+        yq -r '.dependencies[] | .name + " " + .repository' Chart.yaml | while read -r line; do
+          [ -n "$line" ] || continue
+          REPO_NAME=$(echo "$line" | cut -d' ' -f1)
+          REPO_URL=$(echo "$line" | cut -d' ' -f2)
+          helm repo add "$REPO_NAME" "$REPO_URL"
         done
       working-directory: ${{ inputs.working-dir }}
       shell: bash
@@ -73,7 +79,9 @@ runs:
     - name: Build, package and push Helm chart
       run: |
         cd charts
-        helm dependency build
+        if [ "$(yq -r '.dependencies // [] | length' Chart.yaml)" != "0" ]; then
+          helm dependency build
+        fi
         if [ "${{ inputs.app-version }}" == "" ]; then
           helm package . --version "$CHART_VERSION"
         else
